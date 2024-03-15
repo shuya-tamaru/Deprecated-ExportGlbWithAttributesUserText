@@ -2,6 +2,7 @@
 using Rhino.Commands;
 using Rhino.Geometry;
 using Rhino.Input.Custom;
+using Rhino.FileIO;
 using System;
 using System.Numerics;
 using System.Text.Json;
@@ -19,6 +20,7 @@ using SharpGLTF.IO;
 using SharpGLTF.Schema2;
 using System.IO;
 using Rhino.DocObjects;
+using System.IO.Compression;
 
 
 namespace ExportGlb
@@ -37,7 +39,6 @@ namespace ExportGlb
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
-            // ユーザーにオブジェクトの選択を促す
             var go = new GetObject();
             go.SetCommandPrompt("Select objects to mesh");
             go.GeometryFilter = ObjectType.Mesh | ObjectType.Brep;
@@ -47,7 +48,7 @@ namespace ExportGlb
             if (go.CommandResult() != Result.Success)
                 return go.CommandResult();
 
-            Rhino.RhinoApp.WriteLine("出力準備中");
+            Rhino.RhinoApp.WriteLine("Please waiting...");
 
             var settings = new MeshingParameters(0); 
             List<MeshWithUserData> meshWithUserDataList = new List<MeshWithUserData>();
@@ -109,50 +110,60 @@ namespace ExportGlb
             var sceneBuilder = new SceneBuilder();
             foreach (var item in meshWithUserDataList)
             {
-                RHINOMESH rhinoMesh = item.Mesh; // Rhinoのメッシュ
+                RHINOMESH rhinoMesh = item.Mesh;
                 var scaleTransform = Rhino.Geometry.Transform.Scale(Point3d.Origin, scaleFactor);
                 rhinoMesh.Transform(scaleTransform);
 
-                List<UserAttribute> attributes = item.UserAttributes; // ユーザーデータリスト
-                Rhino.DocObjects.Material rhinoMaterial = item.RhinoMaterial; // Rhinoのマテリアル
+                List<UserAttribute> attributes = item.UserAttributes; 
+                Rhino.DocObjects.Material rhinoMaterial = item.RhinoMaterial; 
 
-                // RhinoのマテリアルからSharpGLTFのマテリアルを構築
                 string materialName = !string.IsNullOrEmpty(rhinoMaterial.Name) ? rhinoMaterial.Name : "Material_" + materialBuilders.Count.ToString();
                 if (!materialBuilders.TryGetValue(materialName, out MaterialBuilder materialBuilder))
                 {
-                    // 新しいMaterialBuilderを作成し、辞書に追加します
                     materialBuilder = new MaterialBuilder(materialName)
                         .WithDoubleSide(true)
+                        .WithMetallicRoughnessShader()
                         .WithChannelParam(KnownChannel.BaseColor, new Vector4(
                             (float)rhinoMaterial.DiffuseColor.R / 255,
                             (float)rhinoMaterial.DiffuseColor.G / 255,
                             (float)rhinoMaterial.DiffuseColor.B / 255,
-                            1.0f - (float)rhinoMaterial.Transparency // 透明度の処理
+                            1.0f - (float)rhinoMaterial.Transparency 
                         ));
+
+                    var texture = rhinoMaterial.GetBitmapTexture();
+                    Rhino.RhinoApp.WriteLine(texture.ToString());
+                    if (texture != null)
+                    {
+                        var texturePath = texture.FileReference?.FullPath;
+                        Rhino.RhinoApp.WriteLine(texturePath);
+                        if (!string.IsNullOrEmpty(texturePath) && File.Exists(texturePath))
+                        {
+                            
+                            materialBuilder.WithChannelImage(KnownChannel.BaseColor, texturePath);
+                        }
+                    }
                     materialBuilders.Add(materialName, materialBuilder);
                 }
 
-                var meshBuilder = new MeshBuilder<VertexPositionNormal>("mesh");
+                var meshBuilder = new MeshBuilder<VertexPositionNormal, VertexTexture1>("mesh");
                 var prim = meshBuilder.UsePrimitive(materialBuilder);
 
-                rhinoMesh.Faces.ConvertQuadsToTriangles(); // 四角形の面を三角形に変換
+                rhinoMesh.Faces.ConvertQuadsToTriangles(); 
                 rhinoMesh.Normals.ComputeNormals();
                 rhinoMesh.Compact();
 
                 foreach (var face in rhinoMesh.Faces)
                 {
-                    var vertexA = CreateVertexBuilder(rhinoMesh, face.A);
-                    var vertexB = CreateVertexBuilder(rhinoMesh, face.B);
-                    var vertexC = CreateVertexBuilder(rhinoMesh, face.C);
+                    var vertexA = CreateVertexBuilderWithUV(rhinoMesh, face.A);
+                    var vertexB = CreateVertexBuilderWithUV(rhinoMesh, face.B);
+                    var vertexC = CreateVertexBuilderWithUV(rhinoMesh, face.C);
 
-                    // 三角形をプリミティブに追加
                     prim.AddTriangle(vertexA, vertexB, vertexC);
                 }
                 
                 var node = sceneBuilder.AddRigidMesh(meshBuilder, Matrix4x4.Identity);
 
 
-                //Extrasへのユーザーデータの追加（必要に応じて）
                 if (attributes.Count > 0)
                 {
                     Dictionary<string, string> attributesDict = new Dictionary<string, string>();
@@ -168,12 +179,24 @@ namespace ExportGlb
                 }
             }
 
-            VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty> CreateVertexBuilder(RHINOMESH mesh, int vertexIndex)
+
+            VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty> CreateVertexBuilderWithUV(RHINOMESH mesh, int vertexIndex)
             {
                 var position = mesh.Vertices[vertexIndex];
                 var normal = mesh.Normals[vertexIndex];
-                return new VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty>(new VertexPositionNormal(
-                   position.X, position.Z, -position.Y, normal.X, normal.Z, -normal.Y));
+
+                var uv = mesh.TextureCoordinates.Count > vertexIndex ? mesh.TextureCoordinates[vertexIndex] : Point2f.Unset;
+                if (uv == Point2f.Unset) uv = new Point2f(0, 0);
+                return new VertexBuilder<VertexPositionNormal, VertexTexture1, VertexEmpty>
+                    (
+                        new VertexPositionNormal
+                        (
+                            position.X, position.Z, -position.Y, normal.X, normal.Z, -normal.Y
+                        )
+                        , new VertexTexture1(
+                          new Vector2( uv.X, uv.Y)
+                            )
+                    );
             }
 
 
@@ -204,18 +227,38 @@ namespace ExportGlb
             }
             else if (fileFormat == "gltf")
             {
-                model.SaveGLTF(filePath);
+                 var writeSettings = new WriteSettings
+                {
+                    JsonIndented = true,
+                    MergeBuffers = true
+                };
+                model.SaveGLTF(filePath, writeSettings);
                 Rhino.RhinoApp.WriteLine("GLTFファイルを " + filePath + " に保存しました。");
             }
 
-
             return Result.Success;
+        }
+
+        private static string GetImageFormat(string filePath)
+        {
+            var extension = Path.GetExtension(filePath).ToLowerInvariant();
+            switch (extension)
+            {
+                case ".jpg":
+                case ".jpeg":
+                    return "image/jpeg";
+                case ".png":
+                    return "image/png";
+                // 他のサポートされているフォーマットに応じて拡張可能
+                default:
+                    throw new NotSupportedException($"Unsupported image format: {extension}");
+            }
         }
 
         private static float GetModelScaleFactor(RhinoDoc doc)
         {
             var modelUnit = doc.ModelUnitSystem;
-            var scale = 1.0f; // メートル単位への変換係数。デフォルトは1.0（メートルの場合）
+            var scale = 1.0f;
 
             switch (modelUnit)
             {
@@ -224,18 +267,17 @@ namespace ExportGlb
                     scale = 1.0f;
                     break;
                 case UnitSystem.Millimeters:
-                    scale = 0.001f; // ミリメートルからメートルへ
+                    scale = 0.001f; 
                     break;
                 case UnitSystem.Centimeters:
-                    scale = 0.01f; // センチメートルからメートルへ
+                    scale = 0.01f; 
                     break;
                 case UnitSystem.Inches:
-                    scale = 0.0254f; // インチからメートルへ
+                    scale = 0.0254f;
                     break;
                 case UnitSystem.Feet:
-                    scale = 0.3048f; // フィートからメートルへ
+                    scale = 0.3048f;
                     break;
-                    // その他の単位系の場合は、適宜変換係数を追加してください
             }
 
             return scale;
@@ -243,9 +285,6 @@ namespace ExportGlb
 
 
     }
-
-
-
 
 
     class MeshWithUserData
