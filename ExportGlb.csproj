@@ -17,7 +17,7 @@
     <PackageReference Include="RhinoCommon" Version="8.5.24072.13001" />
     <PackageReference Include="SharpGltfTileExt" Version="0.0.9" />
     <PackageReference Include="System.Numerics.Vectors" Version="4.5.0" />
-    <PackageReference Include="System.Text.Json" Version="4.7.2" />
+    <PackageReference Include="System.Text.Json" Version="8.0.3" />
   </ItemGroup>
 
   <ItemGroup>
