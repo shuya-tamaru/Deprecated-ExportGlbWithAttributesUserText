@@ -2,30 +2,20 @@
 using Rhino.Commands;
 using Rhino.Geometry;
 using Rhino.Input.Custom;
-using Rhino.FileIO;
-using System;
+using Rhino.DocObjects;
 using System.Numerics;
-using System.Text.Json;
-using System.Text.Encodings.Web;
-using System.Text.Unicode;
-using SYSENV = System.Environment;
 using System.Collections.Generic;
 using SharpGLTF.Geometry;
 using SharpGLTF.Geometry.VertexTypes;
 using SharpGLTF.Materials;
 using SharpGLTF.Scenes;
 using RHINOMESH = Rhino.Geometry.Mesh;
-
 using SharpGLTF.IO;
-using SharpGLTF.Schema2;
 using System.IO;
-using Rhino.DocObjects;
-using System.IO.Compression;
 using ExportGlb.Models;
 using ExportGlb.Utilities;
 using ExportGlb.Helpers;
-
-
+using Rhino.FileIO;
 
 namespace ExportGlb
 {
@@ -43,21 +33,28 @@ namespace ExportGlb
 
         protected override Result RunCommand(RhinoDoc doc, RunMode mode)
         {
-            var go = new GetObject();
-            go.SetCommandPrompt("Select objects to mesh");
-            go.GeometryFilter = ObjectType.Mesh | ObjectType.Brep;
-            go.SubObjectSelect = false;
-            go.GroupSelect = true;
-            go.GetMultiple(1, 0);
-            if (go.CommandResult() != Result.Success)
-                return go.CommandResult();
+            var geometry = new GetObject();
+            geometry.SetCommandPrompt("Select objects to mesh");
+            geometry.GeometryFilter = ObjectType.Mesh | ObjectType.Brep;
+            geometry.SubObjectSelect = false;
+            geometry.GroupSelect = true;
+            geometry.GetMultiple(1, 0);
+            if (geometry.CommandResult() != Result.Success)
+            {
+                Rhino.RhinoApp.WriteLine("An error occurred: " + geometry.CommandResult().ToString());
+                return geometry.CommandResult();
+            }
 
             Rhino.RhinoApp.WriteLine("Please waiting...");
 
             var settings = new MeshingParameters(0); 
             List<MeshWithUserData> meshWithUserDataList = new List<MeshWithUserData>();
 
-            foreach (var objRef in go.Objects())
+            Rhino.DocObjects.Material defaultMaterial = new Rhino.DocObjects.Material();
+            defaultMaterial.Name = "Default";
+            defaultMaterial.DiffuseColor = System.Drawing.Color.White;
+
+            foreach (var objRef in geometry.Objects())
             {
                 List<UserAttribute> userAttributes = new List<UserAttribute>();
                 var attributes = objRef.Object().Attributes;
@@ -68,8 +65,12 @@ namespace ExportGlb
                     userAttributes.Add(new UserAttribute { key = key, value = value });
                 }
 
-                Rhino.DocObjects.Material rhinoMaterial = null;
-                if (objRef.Object().Attributes.MaterialSource == ObjectMaterialSource.MaterialFromLayer)
+                Rhino.DocObjects.Material rhinoMaterial = defaultMaterial;
+                if (objRef.Object().Attributes.MaterialSource == ObjectMaterialSource.MaterialFromObject)
+                {
+                    rhinoMaterial = doc.Materials[objRef.Object().Attributes.MaterialIndex];
+                }
+                else if (objRef.Object().Attributes.MaterialSource == ObjectMaterialSource.MaterialFromLayer)
                 {
                     var layerIndex = objRef.Object().Attributes.LayerIndex;
                     var layer = doc.Layers[layerIndex];
@@ -77,10 +78,6 @@ namespace ExportGlb
                     {
                         rhinoMaterial = doc.Materials[layer.RenderMaterialIndex];
                     }
-                }
-                else if (objRef.Object().Attributes.MaterialSource == ObjectMaterialSource.MaterialFromObject)
-                {
-                    rhinoMaterial = doc.Materials[objRef.Object().Attributes.MaterialIndex];
                 }
 
                 RHINOMESH mesh = null;
@@ -110,6 +107,8 @@ namespace ExportGlb
             float scaleFactor = Utility.GetModelScaleFactor(RhinoDoc.ActiveDoc);
             Dictionary<string, MaterialBuilder> materialBuilders = new Dictionary<string, MaterialBuilder>();
             var sceneBuilder = new SceneBuilder();
+
+
             foreach (var item in meshWithUserDataList)
             {
                 RHINOMESH rhinoMesh = item.Mesh;
@@ -117,7 +116,7 @@ namespace ExportGlb
                 rhinoMesh.Transform(scaleTransform);
 
                 List<UserAttribute> attributes = item.UserAttributes; 
-                Rhino.DocObjects.Material rhinoMaterial = item.RhinoMaterial; 
+                Rhino.DocObjects.Material rhinoMaterial = item.RhinoMaterial;
 
                 string materialName = !string.IsNullOrEmpty(rhinoMaterial.Name) ? rhinoMaterial.Name : "Material_" + materialBuilders.Count.ToString();
                 if (!materialBuilders.TryGetValue(materialName, out MaterialBuilder materialBuilder))
@@ -129,14 +128,13 @@ namespace ExportGlb
                             (float)rhinoMaterial.DiffuseColor.R / 255,
                             (float)rhinoMaterial.DiffuseColor.G / 255,
                             (float)rhinoMaterial.DiffuseColor.B / 255,
-                            1.0f - (float)rhinoMaterial.Transparency 
+                            1.0f - (float)rhinoMaterial.Transparency
                         ));
 
                     var texture = rhinoMaterial.GetBitmapTexture();
                     if (texture != null)
                     {
                         var texturePath = texture.FileReference?.FullPath;
-                        Rhino.RhinoApp.WriteLine(texturePath);
                         if (!string.IsNullOrEmpty(texturePath) && File.Exists(texturePath))
                         {
                             
@@ -178,6 +176,7 @@ namespace ExportGlb
                     meshBuilder.Extras = extras;
                 }
             }
+
 
             //Export glb or gltf file
             bool isSaved = FileSaver.ShowSaveFileDialogAndSave(sceneBuilder, doc);

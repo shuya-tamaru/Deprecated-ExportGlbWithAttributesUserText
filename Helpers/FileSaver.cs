@@ -14,7 +14,6 @@ namespace ExportGlb.Helpers
             var docPath = doc.Path;
             var docName = string.IsNullOrEmpty(docPath) ? "untitled" : Path.GetFileNameWithoutExtension(docPath);
             var defaultFileName = $"{docName}.glb";
-
             var saveFileDialog = new Rhino.UI.SaveFileDialog
             {
                 DefaultExt = "glb",
@@ -29,8 +28,11 @@ namespace ExportGlb.Helpers
                 return false;
             }
 
+
             var filePath = saveFileDialog.FileName;
+
             SaveFile(sceneBuilder, filePath);
+
             return true;
         }
 
@@ -39,9 +41,9 @@ namespace ExportGlb.Helpers
             var fileFormat = Path.GetExtension(filePath).ToLower();
             var model = sceneBuilder.ToGltf2();
             if (fileFormat == ".glb")
-            {
-                model.SaveGLB(filePath);
-                Rhino.RhinoApp.WriteLine("GLB Exported to " + filePath);
+            {                
+                 model.SaveGLB(filePath);
+                 Rhino.RhinoApp.WriteLine("GLB Exported to " + filePath);
             }
             else if (fileFormat == ".gltf")
             {
