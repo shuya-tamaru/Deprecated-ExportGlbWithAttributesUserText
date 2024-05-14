@@ -15,7 +15,7 @@ using System.IO;
 using ExportGlb.Models;
 using ExportGlb.Utilities;
 using ExportGlb.Helpers;
-using Rhino.FileIO;
+
 
 namespace ExportGlb
 {
@@ -56,58 +56,79 @@ namespace ExportGlb
 
             foreach (var objRef in geometry.Objects())
             {
-                List<UserAttribute> userAttributes = new List<UserAttribute>();
-                var attributes = objRef.Object().Attributes;
-                var keys = attributes.GetUserStrings();
-                foreach (string key in keys)
-                {
-                    var value = attributes.GetUserString(key);
-                    userAttributes.Add(new UserAttribute { key = key, value = value });
-                }
-
-                Rhino.DocObjects.Material rhinoMaterial = defaultMaterial;
-                if (objRef.Object().Attributes.MaterialSource == ObjectMaterialSource.MaterialFromObject)
-                {
-                    rhinoMaterial = doc.Materials[objRef.Object().Attributes.MaterialIndex];
-                }
-                else if (objRef.Object().Attributes.MaterialSource == ObjectMaterialSource.MaterialFromLayer)
-                {
-                    var layerIndex = objRef.Object().Attributes.LayerIndex;
-                    var layer = doc.Layers[layerIndex];
-                    if (layer.RenderMaterialIndex >= 0)
+                try {
+                    //Convert Brep to Mesh
+                    RHINOMESH mesh = null;
+                    if (objRef.Mesh() != null)
                     {
-                        rhinoMaterial = doc.Materials[layer.RenderMaterialIndex];
+                        mesh = objRef.Mesh();
                     }
-                }
-
-                RHINOMESH mesh = null;
-                if (objRef.Mesh() != null)
-                {
-                    mesh = objRef.Mesh();
-                }
-                else if (objRef.Brep() != null)
-                {
-                    var brepMeshes = RHINOMESH.CreateFromBrep(objRef.Brep(), settings);
-                    if (brepMeshes.Length > 0)
+                    else if (objRef.Brep() != null)
                     {
-                        mesh = new RHINOMESH();
-                        foreach (var m in brepMeshes)
+                        var brep = objRef.Brep();
+                        if (!GeometryValidator.IsValidBrep(brep))
                         {
-                            mesh.Append(m);
+                            continue;
+                        }
+                        var brepMeshes = RHINOMESH.CreateFromBrep(brep, settings);
+                        if (brepMeshes != null && brepMeshes.Length > 0)
+                        {
+                            mesh = new RHINOMESH();
+                            foreach (var m in brepMeshes)
+                            {
+                                mesh.Append(m);
+                            }
                         }
                     }
-                }
 
-                if (mesh != null && rhinoMaterial != null)
+                    if (mesh == null || !GeometryValidator.IsValidMesh(mesh))
+                    {
+                        continue;
+                    }
+
+                    //Get Material
+                    Rhino.DocObjects.Material rhinoMaterial = defaultMaterial;
+                    if (objRef.Object().Attributes.MaterialSource == ObjectMaterialSource.MaterialFromObject)
+                    {
+                        rhinoMaterial = doc.Materials[objRef.Object().Attributes.MaterialIndex];
+                    }
+                    else if (objRef.Object().Attributes.MaterialSource == ObjectMaterialSource.MaterialFromLayer)
+                    {
+                        var layerIndex = objRef.Object().Attributes.LayerIndex;
+                        var layer = doc.Layers[layerIndex];
+                        if (layer.RenderMaterialIndex >= 0)
+                        {
+                            rhinoMaterial = doc.Materials[layer.RenderMaterialIndex];
+                        }
+                    }
+
+                    //Get UserAttributes
+                    List<UserAttribute> userAttributes = new List<UserAttribute>();
+                    var attributes = objRef.Object().Attributes;
+                    var keys = attributes.GetUserStrings();
+                    foreach (string key in keys)
+                    {
+                        var value = attributes.GetUserString(key);
+                        userAttributes.Add(new UserAttribute { key = key, value = value });
+                    }
+
+                    //Add MeshWithUserData to list
+                    if (mesh != null && rhinoMaterial != null)
+                    {
+                        meshWithUserDataList.Add(new MeshWithUserData(mesh, userAttributes, rhinoMaterial));
+                    }
+
+                }
+                catch (System.Exception ex)
                 {
-                    meshWithUserDataList.Add(new MeshWithUserData(mesh, userAttributes, rhinoMaterial));
+                    Rhino.RhinoApp.WriteLine("An error occurred: " + ex.Message);
+                    return Result.Failure;
                 }
             }
 
             float scaleFactor = Utility.GetModelScaleFactor(RhinoDoc.ActiveDoc);
             Dictionary<string, MaterialBuilder> materialBuilders = new Dictionary<string, MaterialBuilder>();
             var sceneBuilder = new SceneBuilder();
-
 
             foreach (var item in meshWithUserDataList)
             {
@@ -160,8 +181,6 @@ namespace ExportGlb
                     prim.AddTriangle(vertexA, vertexB, vertexC);
                 }
 
-                sceneBuilder.AddRigidMesh(meshBuilder, Matrix4x4.Identity);
-
                 if (attributes.Count > 0)
                 {
                     Dictionary<string, string> attributesDict = new Dictionary<string, string>();
@@ -175,6 +194,8 @@ namespace ExportGlb
                     var extras = JsonContent.CreateFrom(attributesDict);
                     meshBuilder.Extras = extras;
                 }
+
+                sceneBuilder.AddRigidMesh(meshBuilder, Matrix4x4.Identity);
             }
 
 

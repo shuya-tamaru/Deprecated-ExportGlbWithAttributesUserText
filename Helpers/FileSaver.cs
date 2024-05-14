@@ -1,5 +1,4 @@
-﻿using System;
-using System.IO;
+﻿using System.IO;
 using SYSENV = System.Environment;
 using Rhino;
 using SharpGLTF.Scenes;

@@ -1,7 +1,5 @@
-﻿using Rhino.Geometry;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Rhino.DocObjects;
-using Rhino;
 using RHINOMESH = Rhino.Geometry.Mesh;
 
 namespace ExportGlb.Models
