@@ -1,1 +1,1 @@
-# [WIP] Rhinoceros Plugin :Export Geometries as gltf/glb format with attributes user text
+### Rhinoceros Plugin :Export Geometries as gltf/glb format with attributes user text.
